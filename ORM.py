@@ -1,44 +1,61 @@
-from sqlalchemy import engine,Column,Integer,String,create_engine
-from sqlalchemy.orm import sessionmaker,declarative_base
+# from sqlalchemy import engine,Column,Integer,String,create_engine
+# from sqlalchemy.orm import sessionmaker,declarative_base
 
-Database = "mysql+pymysql://root:ar4729189@localhost:3306/aws"
+# Database = "mysql+pymysql://root:ar4729189@localhost:3306/aws"
 
-abdul = create_engine(Database , echo = True)
-session =sessionmaker(bind=abdul)
-base = declarative_base()
+# abdul = create_engine(Database , echo = True)
+# session =sessionmaker(bind=abdul)
+# base = declarative_base()
 
 
-class user(base):
-    __tablename__ = "users"
-    id = Column(Integer,primary_key=True)
-    name = Column(String(50))
-    marks = Column(Integer)
+# class user(base):
+#     __tablename__ = "users"
+#     id = Column(Integer,primary_key=True)
+#     name = Column(String(50))
+#     marks = Column(Integer)
     
-base.metadata.create_all(bind=abdul)
+# base.metadata.create_all(bind=abdul)
 
-data =session()
+# data =session()
 
-new_student = [user(name="abdulrehman",marks = 1087),user(name = "Wasif",marks = 1093),user(name = "Ali",marks = 1050),user(name = "Haris",marks = 1000),user(name = "Ahsan",marks = 1020)]
+# new_student = [user(name="abdulrehman",marks = 1087),user(name = "Wasif",marks = 1093),user(name = "Ali",marks = 1050),user(name = "Haris",marks = 1000),user(name = "Ahsan",marks = 1020)]
 
-data.add_all(new_student)
-data.commit()
-deleting = data.query(user).filter(user.marks == 1090).delete()
+# data.add_all(new_student)
+# data.commit()
+# deleting = data.query(user).filter(user.marks == 1090).delete()
 
-if deleting:
-    data.commit()
-    print("deleted")
-else:
-    print("not found")
+# if deleting:
+#     data.commit()
+#     print("deleted")
+# else:
+#     print("not found")
     
-student = data.query(user).all()
-for i in student:
-    print(i.id,i.name,i.marks)
+# student = data.query(user).all()
+# for i in student:
+#     print(i.id,i.name,i.marks)
 
-
-data.close()
+# data.close()
 
 # 573247714279
 
+# practice
+from jose import jwt
+secret_key = "abdulrehman"
+payload = {"user_id": 1}
+token = jwt.encode(payload, secret_key, algorithm="HS256")
+print(token)
 
 
-    
+# vertical scaling 
+# horizontal scaling
+# load balancer
+# database(aya ke hum konsa data base use kerty hai or ye ke hum videos,picsetc.. database mai store kerty hai)
+# indexing VIP
+# sharding
+# replica
+# cap theorm
+# rate limiter
+# CDN content delivery network
+# api design
+# architecture
+# punching cards
