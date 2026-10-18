@@ -6,12 +6,13 @@ from sqlalchemy import create_engine,Integer,String,Column
 from sqlalchemy.orm import sessionmaker,declarative_base,Session
 import bcrypt
 import email_validator
-from jose import jwt,JWTError
+from jose import jwt,JWTError,ExpiredSignatureError
 from datetime import datetime, timedelta
 
 
 My_app_Secrete_key = "manualchoice"
 algorithm = 'HS256'
+Refresh_token_key = 'refreshtoken'
 
 app = FastAPI(title="User Authentication API")
 
@@ -51,6 +52,13 @@ def create_user_tocken(data:dict):
     encode.update({"exp":expire})
     encoded_jwt = jwt.encode(encode,My_app_Secrete_key,algorithm=algorithm)
     return encoded_jwt
+
+def create_refresh_token(data : dict):
+    to_encode = data.copy()
+    expires = datetime.utcnow()+timedelta(minutes=2)
+    to_encode.update({"exp":expires,"type":"refresh"})
+    # encoded_jwt = jwt.encode(To_encode,Refresh_token_key,algorithm=algorithm)  
+    return jwt.encode(to_encode,Refresh_token_key,algorithm=algorithm) 
     
 class user(base):
     __tablename__ = "Authentication"
@@ -69,6 +77,9 @@ class user_data(BaseModel):
 class login_schemas(BaseModel):
     email : str
     Password : str
+    
+class refresh_token_(BaseModel):
+    refresh_token : str
     
 
 create_user_table()
@@ -125,7 +136,13 @@ def Login_form(form_data: OAuth2PasswordRequestForm = Depends(),data: Session = 
           "role": data_.role,
       }
   )
-  return {"access_token": tocken, "token_type": "bearer"}
+  refreshtoken = create_refresh_token(
+      data={
+          "sub":data_.username,
+          "role":data_.role
+      }
+  )
+  return {"access_token": tocken,"refresh_token":refreshtoken, "token_type": "bearer"}
 
     
 @app.get("/verifying_token")
@@ -146,6 +163,32 @@ def auth_btn(token : str = Depends(auth)):
             status_code = status.HTTP_401_UNAUTHORIZED,
             detail = "token expire or invalid login again"
         )
+        
+@app.post("/refresh_token")
+def refresh(data: refresh_token_):
+    token = data.refresh_token
+    try:
+        payload = jwt.decode(token, Refresh_token_key, algorithms=[algorithm])
+        if payload.get("type") != "refresh":
+            raise HTTPException(status_code=401, detail="invalid token type")
+        
+        username = payload.get("sub")
+        user_role = payload.get("role")
+        
+        if not username:
+            raise HTTPException(status_code=401, detail="invalid payload")
+        
+        new_access_token = create_user_tocken({"sub": username, "role": user_role})
+        
+        return {"access_token": new_access_token, "token_type": "bearer"}
+        
+    except ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="refresh token expired. Please login again")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="invalid refresh token")
+    
+        
+        
         
     # return {
     #     "message" : "you are authorized!",
