@@ -1,5 +1,6 @@
 import uvicorn
-from fastapi import FastAPI,Depends,HTTPException,status,Header
+from fastapi import FastAPI,Depends,HTTPException,status,Header,Response,Request
+from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordBearer,OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from sqlalchemy import create_engine,Integer,String,Column
@@ -8,6 +9,7 @@ import bcrypt
 import email_validator
 from jose import jwt,JWTError,ExpiredSignatureError
 from datetime import datetime, timedelta
+from starlette.middleware.base import BaseHTTPMiddleware
 
 
 My_app_Secrete_key = "manualchoice"
@@ -23,6 +25,10 @@ abdul = create_engine(Database,pool_recycle=3600, pool_pre_ping= True , echo=Tru
 session = sessionmaker(bind=abdul)
 base = declarative_base()
 data = session()
+
+def add_middleware():
+    app.add_middleware(JWTMiddleware)
+
 
 def database_get():
     data = session()
@@ -41,10 +47,47 @@ def hash_password(password : str):
 def create_user_table():
     base.metadata.create_all(bind=abdul)
 
-def email_validation():
-    # jwt.encode(My_app_Secrete_key,
-    pass
-    
+class JWTMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        # Yahan sirf woh paths hon jo sach mein PUBLIC hain (Dashboard yahan nahi hona chahiye!)
+        paths = [
+            "/", 
+            "/login", 
+            "/Register", 
+            "/docs", 
+            "/verifying_token", 
+            "/openapi.json", 
+            "/redoc", 
+            "/refresh_token"
+        ]
+        
+        if request.url.path in paths or request.url.path.startswith("/static"):
+            return await call_next(request)
+        
+        header = request.headers.get("Authorization")
+        if not header or not header.startswith("Bearer "):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Missing or invalid Authorization header"}
+            )
+        
+        # ⚠️ YAHAN GHATI THEEK KI HAI: Bearer ke baad ka poora token uthana hai (.split()[1])
+        token = header.split(" ")[1]  
+        
+        try:
+            payload = jwt.decode(token, My_app_Secrete_key, algorithms=[algorithm]) 
+            request.state.user = payload
+            
+        except JWTError:
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Invalid or expired token"}
+            )
+            
+        response = await call_next(request)
+        return response
+            
+add_middleware()
 
 def create_user_tocken(data:dict):
     encode = data.copy()    
@@ -80,7 +123,6 @@ class login_schemas(BaseModel):
     
 class refresh_token_(BaseModel):
     refresh_token : str
-    
 
 create_user_table()
 
@@ -101,7 +143,6 @@ def regiter_user(users:user_data, data : Session = Depends(database_get)):
     hashed_bytes = bcrypt.hashpw(users.Password.encode("utf-8"),bcrypt.gensalt())
     hashed_password = hashed_bytes.decode("utf-8")
     
-
     # hashed_Password = hash_password(users.Password)
     new_user = user(username = users.username,email = users.email, Password = hashed_password,role = users.role)
     data.add(new_user)
@@ -187,6 +228,62 @@ def refresh(data: refresh_token_):
     except JWTError:
         raise HTTPException(status_code=401, detail="invalid refresh token")
     
+    
+    
+@app.get("/dashboard")
+def dashboard(request:Request):
+    current_user = getattr(request.state,"user",None)
+    if not current_user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication state missing"
+        )
+    
+    return {
+        "status": "success",
+        "message": f"Welcome to the secret dashboard, {current_user.get('sub')}!",
+        "role": current_user.get('role'),
+        "data": "Only authorized user can see this via JWT Middleware"
+    }
+    
+    
+    
+# @app.get("/dashboard")
+# def protected_dashboard(token: str = Depends(auth)):
+#     try:
+#         payload = jwt.decode(token, My_app_Secrete_key, algorithms=[algorithm])
+#         username = payload.get("sub")
+#         role = payload.get("role")
+        
+#         return {
+#             "status": "success",
+#             "message": f"Welcome to the secret dashboard, {username}!",
+#             "your_role": role,
+#             "data": "Only authorized user can see"
+#         }
+#     except JWTError:
+#         raise HTTPException(
+#             status_code=status.HTTP_401_UNAUTHORIZED,
+#             detail="Invalid or expired token. Please login again."
+#         )
+        
+        
+@app.get("/admin/dashboard")
+def admin_dashboard(token: str = Depends(auth)):
+    try:
+        payload = jwt.decode(token, My_app_Secrete_key, algorithms=[algorithm])
+        role = payload.get("role")
+        
+        if role != "admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, 
+                detail="You are not authorized! Admin access required."
+            )
+            
+        return {"message": "Welcome to Admin Panel!"}
+        
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
         
         
         
