@@ -17,7 +17,7 @@ algorithm = 'HS256'
 Refresh_token_key = 'refreshtoken'
 
 app = FastAPI(title="User Authentication API")
-
+# oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 auth = OAuth2PasswordBearer(tokenUrl="login")
 
 Database = "mysql+pymysql://root:ar4729189@localhost:3306/aws"
@@ -49,7 +49,7 @@ def create_user_table():
 
 class JWTMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        # Yahan sirf woh paths hon jo sach mein PUBLIC hain (Dashboard yahan nahi hona chahiye!)
+        
         paths = [
             "/", 
             "/login", 
@@ -71,7 +71,7 @@ class JWTMiddleware(BaseHTTPMiddleware):
                 content={"detail": "Missing or invalid Authorization header"}
             )
         
-        # ⚠️ YAHAN GHATI THEEK KI HAI: Bearer ke baad ka poora token uthana hai (.split()[1])
+       
         token = header.split(" ")[1]  
         
         try:
@@ -91,14 +91,14 @@ add_middleware()
 
 def create_user_tocken(data:dict):
     encode = data.copy()    
-    expire = datetime.utcnow() + timedelta(seconds=30)
+    expire = datetime.utcnow() + timedelta(minutes=3)
     encode.update({"exp":expire})
     encoded_jwt = jwt.encode(encode,My_app_Secrete_key,algorithm=algorithm)
     return encoded_jwt
 
 def create_refresh_token(data : dict):
     to_encode = data.copy()
-    expires = datetime.utcnow()+timedelta(minutes=2)
+    expires = datetime.utcnow()+timedelta(minutes=4)
     to_encode.update({"exp":expires,"type":"refresh"})
     # encoded_jwt = jwt.encode(To_encode,Refresh_token_key,algorithm=algorithm)  
     return jwt.encode(to_encode,Refresh_token_key,algorithm=algorithm) 
@@ -159,7 +159,8 @@ def regiter_user(users:user_data, data : Session = Depends(database_get)):
 
 @app.post("/login")
 def Login_form(form_data: OAuth2PasswordRequestForm = Depends(),data: Session = Depends(database_get)):
-  data_ = data.query(user).filter(user.email == form_data.username).first()
+  username_or_email = form_data.username.strip()
+  data_ = data.query(user).filter((user.email == form_data.username) | (user.username == form_data.username)).first()
 
   if not data_:
     raise HTTPException(status_code=400, detail="invalid email or password")
@@ -231,7 +232,7 @@ def refresh(data: refresh_token_):
     
     
 @app.get("/dashboard")
-def dashboard(request:Request):
+def dashboard(request:Request,token : str = Depends(auth)):
     current_user = getattr(request.state,"user",None)
     if not current_user:
         raise HTTPException(
