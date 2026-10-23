@@ -1,4 +1,6 @@
+import os
 import uvicorn
+from dotenv import load_dotenv
 from fastapi import FastAPI,Depends,HTTPException,status,Header,Response,Request
 from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordBearer,OAuth2PasswordRequestForm
@@ -11,20 +13,37 @@ from jose import jwt,JWTError,ExpiredSignatureError
 from datetime import datetime, timedelta
 from starlette.middleware.base import BaseHTTPMiddleware
 
+load_dotenv()
 
-My_app_Secrete_key = "manualchoice"
+
+MY_APP_SECRETE_KEY = os.getenv("secrete_key")  # type: ignore
 algorithm = 'HS256'
-Refresh_token_key = 'refreshtoken'
+Refresh_token_key = os.getenv("refresh_key")  # type: ignore
+
+if not MY_APP_SECRETE_KEY:
+    raise ValueError("Error: Also define secrete_key in env file")
+
+if not Refresh_token_key:
+    raise ValueError("Error: Also define refresh_key in env file")
+
+assert MY_APP_SECRETE_KEY is not None
+assert algorithm is not None
 
 app = FastAPI(title="User Authentication API")
 # oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 auth = OAuth2PasswordBearer(tokenUrl="login")
 
-Database = "mysql+pymysql://root:ar4729189@localhost:3306/aws"
-abdul = create_engine(Database,pool_recycle=3600, pool_pre_ping= True , echo=True)
+Database = os.getenv("database") #type : ignore
+
+if not Database:
+    raise ValueError("Error: .env file mein database lazmi define karein!")
+
+abdul = create_engine(Database,pool_recycle=3600, pool_pre_ping= True , echo=True) #type : ignore
 session = sessionmaker(bind=abdul)
 base = declarative_base()
 data = session()
+
+
 
 def add_middleware():
     app.add_middleware(JWTMiddleware)
@@ -75,7 +94,7 @@ class JWTMiddleware(BaseHTTPMiddleware):
         token = header.split(" ")[1]  
         
         try:
-            payload = jwt.decode(token, My_app_Secrete_key, algorithms=[algorithm]) 
+            payload = jwt.decode(token, MY_APP_SECRETE_KEY, algorithms=[algorithm]) # type: ignore
             request.state.user = payload
             
         except JWTError:
@@ -93,7 +112,7 @@ def create_user_tocken(data:dict):
     encode = data.copy()    
     expire = datetime.utcnow() + timedelta(minutes=3)
     encode.update({"exp":expire})
-    encoded_jwt = jwt.encode(encode,My_app_Secrete_key,algorithm=algorithm)
+    encoded_jwt = jwt.encode(encode,MY_APP_SECRETE_KEY,algorithm=algorithm) # type: ignore
     return encoded_jwt
 
 def create_refresh_token(data : dict):
@@ -101,7 +120,7 @@ def create_refresh_token(data : dict):
     expires = datetime.utcnow()+timedelta(minutes=4)
     to_encode.update({"exp":expires,"type":"refresh"})
     # encoded_jwt = jwt.encode(To_encode,Refresh_token_key,algorithm=algorithm)  
-    return jwt.encode(to_encode,Refresh_token_key,algorithm=algorithm) 
+    return jwt.encode(to_encode,Refresh_token_key,algorithm=algorithm) # type: ignore
     
 class user(base):
     __tablename__ = "Authentication"
@@ -138,6 +157,24 @@ def regiter_user(users:user_data, data : Session = Depends(database_get)):
         # return{
         #     "message":" user already exists"
         # }
+    admin_email = "abdulrehman.devstack@gmail.com"
+    if users.role == "admin" and users.email != admin_email:
+        raise HTTPException(
+            status_code=401,
+            detail="you are not admin type user"
+        )
+        
+    if users.role != "admin" and users.email == admin_email:
+            raise HTTPException(
+                status_code=401,
+                detail="you are admin not a user"
+            )
+            
+    # if users.role == admin_email:
+    #     users.role = "admin"
+    # else:
+    #     users.role = "user"
+        
     if "@" not in users.email or "." not in users.email:
         raise HTTPException(status_code=400, detail="Invalid email format")
     hashed_bytes = bcrypt.hashpw(users.Password.encode("utf-8"),bcrypt.gensalt())
@@ -190,7 +227,7 @@ def Login_form(form_data: OAuth2PasswordRequestForm = Depends(),data: Session = 
 @app.get("/verifying_token")
 def auth_btn(token : str = Depends(auth)):
     try: 
-        payload = jwt.decode(token,My_app_Secrete_key,algorithms=[algorithm])
+        payload = jwt.decode(token,MY_APP_SECRETE_KEY,algorithms=[algorithm]) # type: ignore
         username: str | None = payload.get("sub")
         role : str | None = payload.get("role")
         if not username:
@@ -210,7 +247,7 @@ def auth_btn(token : str = Depends(auth)):
 def refresh(data: refresh_token_):
     token = data.refresh_token
     try:
-        payload = jwt.decode(token, Refresh_token_key, algorithms=[algorithm])
+        payload = jwt.decode(token, Refresh_token_key, algorithms=[algorithm]) # type: ignore
         if payload.get("type") != "refresh":
             raise HTTPException(status_code=401, detail="invalid token type")
         
@@ -272,7 +309,7 @@ def dashboard(request:Request,token : str = Depends(auth)):
 @app.get("/admin/dashboard")
 def admin_dashboard(token: str = Depends(auth)):
     try:
-        payload = jwt.decode(token, My_app_Secrete_key, algorithms=[algorithm])
+        payload = jwt.decode(token, MY_APP_SECRETE_KEY, algorithms=[algorithm]) # type: ignore
         role = payload.get("role")
         
         if role != "admin":
