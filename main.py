@@ -1,49 +1,46 @@
-import os
-import uvicorn
-from dotenv import load_dotenv
-from fastapi import FastAPI,Depends,HTTPException,status,Header,Response,Request
-from fastapi.responses import JSONResponse
-from fastapi.security import OAuth2PasswordBearer,OAuth2PasswordRequestForm
-from pydantic import BaseModel
-from sqlalchemy import create_engine,Integer,String,Column
-from sqlalchemy.orm import sessionmaker,declarative_base,Session
-import bcrypt
-import email_validator
-from jose import jwt,JWTError,ExpiredSignatureError
 from datetime import datetime, timedelta
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+import smtplib
+import os
+import bcrypt
+from dotenv import load_dotenv
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response, status
+from fastapi.responses import JSONResponse
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from jose import ExpiredSignatureError, JWTError, jwt
+from pydantic import BaseModel
+from sqlalchemy import Column, DateTime, Integer, String, create_engine
+from sqlalchemy.orm import Session, declarative_base, sessionmaker
 from starlette.middleware.base import BaseHTTPMiddleware
 
 load_dotenv()
 
-
 MY_APP_SECRETE_KEY = os.getenv("secrete_key")  # type: ignore
-algorithm = 'HS256'
+algorithm = "HS256"
 Refresh_token_key = os.getenv("refresh_key")  # type: ignore
 
 if not MY_APP_SECRETE_KEY:
-    raise ValueError("Error: Also define secrete_key in env file")
+  raise ValueError("Error: Also define secrete_key in env file")
 
 if not Refresh_token_key:
-    raise ValueError("Error: Also define refresh_key in env file")
+  raise ValueError("Error: Also define refresh_key in env file")
 
 assert MY_APP_SECRETE_KEY is not None
 assert algorithm is not None
 
 app = FastAPI(title="User Authentication API")
-# oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 auth = OAuth2PasswordBearer(tokenUrl="login")
 
-Database = os.getenv("database") #type : ignore
+Database = os.getenv("database")  # type : ignore
 
 if not Database:
-    raise ValueError("Error: .env file mein database lazmi define karein!")
+  raise ValueError("Error: .env file mein database lazmi define karein!")
 
-abdul = create_engine(Database,pool_recycle=3600, pool_pre_ping= True , echo=True) #type : ignore
+abdul = create_engine(Database, pool_recycle=3600, pool_pre_ping=True, echo=True)  # type : ignore
 session = sessionmaker(bind=abdul)
 base = declarative_base()
 data = session()
-
-
 
 def add_middleware():
     app.add_middleware(JWTMiddleware)
@@ -115,6 +112,50 @@ def create_user_tocken(data:dict):
     encoded_jwt = jwt.encode(encode,MY_APP_SECRETE_KEY,algorithm=algorithm) # type: ignore
     return encoded_jwt
 
+
+# for temporary generate refresh for password reset
+def create_reset_token(email: str):
+    expire = datetime.utcnow() + timedelta(minutes=15)
+    to_encode = {"sub": email, "type": "reset_password", "exp": expire}
+    return jwt.encode(to_encode, MY_APP_SECRETE_KEY, algorithm=algorithm)#type:ignore
+
+
+# mailtrap sending function 
+def send_reset_email(email: str, token: str):
+    sender = "noreply@authapi.com"
+    receiver = email
+    reset_link = f"http://127.0.0.1:8001/reset-password?token={token}"
+
+    message = MIMEMultipart("alternative")
+    message["Subject"] = "Password Reset Request"
+    message["From"] = sender
+    message["To"] = receiver
+
+    html = f"""\
+    <html>
+      <body>
+        <h3>Password Reset Request</h3>
+        <p>Aapne password reset karne ki request ki hai.</p>
+        <p>Apna naya password set karne ke liye niche diye gaye link par click karein:</p>
+        <a href="{reset_link}" target="_blank">Reset Password</a>
+        <p>Yeh link sirf 15 minutes ke liye valid hai.</p>
+      </body>
+    </html>
+    """
+    message.attach(MIMEText(html, "html"))
+
+    try:
+        # .env se server aur port utha kar Mailtrap se connect karega
+        server = smtplib.SMTP(os.getenv("MAIL_SERVER"), int(os.getenv("MAIL_PORT", 2525))) # type: ignore
+        server.starttls()
+        server.login(os.getenv("MAIL_USERNAME"), os.getenv("MAIL_PASSWORD")) # type: ignore
+        server.sendmail(sender, receiver, message.as_string())
+        server.quit()
+    except Exception as e:
+        print(f"Email error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to send reset email")
+    
+
 def create_refresh_token(data : dict):
     to_encode = data.copy()
     expires = datetime.utcnow()+timedelta(minutes=4)
@@ -125,10 +166,28 @@ def create_refresh_token(data : dict):
 class user(base):
     __tablename__ = "Authentication"
     id = Column(Integer ,primary_key = True)
-    username = Column(String(50),unique=True,nullable=False)
+    username = Column(String(50),nullable=False)
     email = Column(String(50),unique=True,nullable=False)
     Password = Column(String(255),nullable=False)
     role = Column(String(50), default = "user",nullable=False)
+    
+def get_current_verified_token(
+    token: str = Depends(auth), db: Session = Depends(database_get)
+):
+  blacklisted = db.query(blacklist).filter(blacklist.token == token).first()
+  if blacklisted:
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Token has been revoked. Please login again.",
+    )
+  return token  
+    
+class blacklist(base):
+    __tablename__ = "Blacklist"
+    id = Column(Integer,primary_key=True,autoincrement=True)
+    username = Column(String(50),nullable=False)
+    token = Column(String(500),unique=True,nullable=False,index=True)
+    expiry_time = Column(DateTime, nullable=False)
     
 class user_data(BaseModel):
     username : str
@@ -142,6 +201,13 @@ class login_schemas(BaseModel):
     
 class refresh_token_(BaseModel):
     refresh_token : str
+    
+class ForgotPasswordSchema(BaseModel):
+    email: str
+
+class ResetPasswordSchema(BaseModel):
+    token: str
+    new_password: str
 
 create_user_table()
 
@@ -243,49 +309,55 @@ def auth_btn(token : str = Depends(auth)):
             detail = "token expire or invalid login again"
         )
         
+        
 @app.post("/refresh_token")
 def refresh(data: refresh_token_):
-    token = data.refresh_token
-    try:
-        payload = jwt.decode(token, Refresh_token_key, algorithms=[algorithm]) # type: ignore
-        if payload.get("type") != "refresh":
-            raise HTTPException(status_code=401, detail="invalid token type")
-        
-        username = payload.get("sub")
-        user_role = payload.get("role")
-        
-        if not username:
-            raise HTTPException(status_code=401, detail="invalid payload")
-        
-        new_access_token = create_user_tocken({"sub": username, "role": user_role})
-        
-        return {"access_token": new_access_token, "token_type": "bearer"}
-        
-    except ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="refresh token expired. Please login again")
-    except JWTError:
-        raise HTTPException(status_code=401, detail="invalid refresh token")
-    
+  token = data.refresh_token
+  try:
+    payload = jwt.decode(
+        token, Refresh_token_key, algorithms=[algorithm])  # type: ignore
+    if payload.get("type") != "refresh":
+      raise HTTPException(status_code=401, detail="invalid token type")
+
+    username = payload.get("sub")
+    user_role = payload.get("role")
+
+    if not username:
+      raise HTTPException(status_code=401, detail="invalid payload")
+
+    new_access_token = create_user_tocken(
+        {"sub": username, "role": user_role}
+    )
+
+    return {"access_token": new_access_token, "token_type": "bearer"}
+
+  except ExpiredSignatureError:
+    raise HTTPException(
+        status_code=401, detail="refresh token expired. Please login again"
+    )
+  except JWTError:
+    raise HTTPException(status_code=401, detail="invalid refresh token")
     
     
 @app.get("/dashboard")
-def dashboard(request:Request,token : str = Depends(auth)):
-    current_user = getattr(request.state,"user",None)
-    if not current_user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication state missing"
-        )
+def dashboard(
+    request: Request, token: str = Depends(get_current_verified_token)
+):
+  current_user = getattr(request.state, "user", None)
+  if not current_user:
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Authentication state missing",
+    )
+
+  return {
+      "status": "success",
+      "message": f"Welcome to the secret dashboard, {current_user.get('sub')}!",
+      "role": current_user.get("role"),
+      "data": "Only authorized user can see this via JWT Middleware",
+  }
     
-    return {
-        "status": "success",
-        "message": f"Welcome to the secret dashboard, {current_user.get('sub')}!",
-        "role": current_user.get('role'),
-        "data": "Only authorized user can see this via JWT Middleware"
-    }
-    
-    
-    
+
 # @app.get("/dashboard")
 # def protected_dashboard(token: str = Depends(auth)):
 #     try:
@@ -304,24 +376,124 @@ def dashboard(request:Request,token : str = Depends(auth)):
 #             status_code=status.HTTP_401_UNAUTHORIZED,
 #             detail="Invalid or expired token. Please login again."
 #         )
-        
-        
+ 
 @app.get("/admin/dashboard")
-def admin_dashboard(token: str = Depends(auth)):
+def admin_dashboard(token: str = Depends(get_current_verified_token)):
+  try:
+    payload = jwt.decode(
+        token, MY_APP_SECRETE_KEY, algorithms=[algorithm])  # type: ignore
+    role = payload.get("role")
+
+    if role != "admin":
+      raise HTTPException(
+          status_code=status.HTTP_403_FORBIDDEN,
+          detail="You are not authorized! Admin access required.",
+      )
+
+    return {"message": "Welcome to Admin Panel!"}
+
+  except JWTError:
+    raise HTTPException(status_code=401, detail="Invalid token")
+
+
+@app.post("/logout")
+def logout(
+    Authorization: str = Header(..., alias="Authorization"),
+    data: Session = Depends(database_get),
+):
+  try:
+    parts = Authorization.split()
+    if len(parts) != 2:
+      raise HTTPException(
+          status_code=400,
+          detail="Invalid token header format. Use 'Bearer <token>'",
+      )
+
+    token_type, token = parts
+
+    if token_type.lower() != "bearer":
+      raise HTTPException(
+          status_code=400, detail="Invalid token header format"
+      )
+  except HTTPException:
+    raise
+  except Exception:
+    raise HTTPException(
+        status_code=401, detail="Invalid authorization header structure"
+    )
+
+  try:
+    payload = jwt.decode(
+        token, MY_APP_SECRETE_KEY, algorithms=[algorithm])  # type: ignore
+    username: str | None = payload.get("sub")
+    exp_time = payload.get("exp")
+
+    if not username or not exp_time:
+      raise HTTPException(status_code=401, detail="Invalid token data")
+
+    expiry_time = datetime.fromtimestamp(exp_time)
+
+  except HTTPException:
+    raise
+  except Exception:
+    raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+  data_base = blacklist(username=username, token=token, expiry_time=expiry_time)
+  data.add(data_base)
+  data.commit()
+
+  return {"message": "user logged out successfully"}
+
+
+@app.post("/forgot-password")
+def forgot_password(body: ForgotPasswordSchema, data: Session = Depends(database_get)):
+    # 1. Check karo ke yeh email database mein exist karti hai ya nahi
+    user_record = data.query(user).filter(user.email == body.email).first()
+    if not user_record:
+        raise HTTPException(status_code=404, detail="Email not found")
+    
+    # 2. Reset token generate karo (sirf 15 minutes ke liye)
+    token = create_reset_token(body.email)
+    
+    # 3. Mailtrap ke zariye email send karo
+    send_reset_email(body.email, token)
+    
+    return {"message": "Password reset link sent to your email"}
+
+
+@app.post("/reset-password")
+def reset_password(body: ResetPasswordSchema, data: Session = Depends(database_get)):
     try:
-        payload = jwt.decode(token, MY_APP_SECRETE_KEY, algorithms=[algorithm]) # type: ignore
-        role = payload.get("role")
+        # 1. Token decode aur verify karo
+        payload = jwt.decode(body.token, MY_APP_SECRETE_KEY, algorithms=[algorithm]) # type: ignore
+        if payload.get("type") != "reset_password":
+            raise HTTPException(status_code=401, detail="Invalid token type")
         
-        if role != "admin":
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN, 
-                detail="You are not authorized! Admin access required."
-            )
-            
-        return {"message": "Welcome to Admin Panel!"}
+        email = payload.get("sub")
+        if not email:
+            raise HTTPException(status_code=401, detail="Invalid token payload")
         
+        # 2. User ko database mein dhoondo
+        user_record = data.query(user).filter(user.email == email).first()
+        if not user_record:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # 3. Naya password hash karke save kar do
+        hashed_bytes = bcrypt.hashpw(body.new_password.encode("utf-8"), bcrypt.gensalt())
+        setattr(user_record, "Password", hashed_bytes.decode("utf-8"))
+        data.commit()
+        
+        return {"message": "Password reset successfully. You can login now."}
+        
+    except ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Reset token expired. Please request a new one.")
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
+        
+    # blacklist.add(id,username,token)
+    
+    # return {"message": "Successfully logged out. Token has been revoked."}
+        
         
         
         
